@@ -1,0 +1,22 @@
+# AI Agent Guide
+- **Environment**: Use Python 3.10+ and install deps with `python -m pip install -r requirements.txt`; heavyweight extras (tensorflow, lightgbm, catboost) are optional but required for specific features.
+- **Testing**: Run `pytest` from the repo root; CI expectations mirror the suites in `tests/` that cover feature engineering and LLM helper utilities.
+- **Data Access**: `data.py` centralizes price ingestion with Binance, Yahoo Finance, and Alpha Vantage fallbacks plus optional `yfinance`; `get_price_series` handles single tickers or lists and auto-selects a source based on symbol heuristics.
+- **Caching**: All fetchers append to `data_cache.csv`; reuse `append_rows_to_cache` / `load_cached_data` instead of writing ad-hoc cache logic, and keep the schema `Date,Open,High,Low,Close,Volume,Source,Asset,AssetType` intact.
+- **Feature Engineering**: `features.build_features_from_df` returns `(X, y, feature_names, enriched_df)` with lagged closes plus optional TA extras; tests expect `compute_indicators` to accept `close_col`, `high_col`, `low_col`, `vol_col` similar to the reference implementation in `app1.py`.
+- **Deep Models**: `app.py` calls `models.train_compare_lstm_gru(df, n_lags, ...)` to produce metrics, predictions, scaler info, and training histories; design this function to return the dict structure already unpacked inside the Streamlit UI.
+- **LLM Helpers**: Tests require `models.craft_llm_prompt(prices, extras, predict_horizon, method)` to emit a "Prototype" JSON-only instruction and `models.parse_llm_json_response(txt)` to recover numeric lists from loose text.
+- **HF Integration**: `run_experiment.py` looks for `models.get_llm_forecast_from_df` and reads `HUGGINGFACEHUB_API_TOKEN`; ensure remote calls degrade gracefully when the token or `transformers` is absent.
+- **Classical Baselines**: `classical_models.py` wraps RandomForest, optional XGBoost, and ARIMA training; `run_experiment.py` compares these against naive lag predictors and plots to `results_plot.png`.
+- **Streamlit Apps**: `streamlit run app.py` launches the multi-asset LSTM vs GRU UI, while `streamlit run app1.py` serves the BTC ensemble dashboard with live polling and cached ticks.
+- **UI Expectations**: Both apps rely on `_extract_close_series`-style resilience; keep new dataframes compatible with those helpers (ensure a numeric "Close" column after any transformation).
+- **Lag Pipelines**: When creating new models, respect the `n_lags` alignment used across the app/test code: features drop the first `n_lags` rows, and plots reconstruct indices using `data_splits` returned from `train_compare_lstm_gru`.
+- **Metrics Schema**: Downstream UI expects per-model dicts with keys like `mae_test`, `rmse_test`, `mape_test`, `direction_acc_test`, and `next_pred`; add new metrics without renaming existing ones.
+- **Predictions Structure**: `train_compare_lstm_gru` should populate `preds[model_name]['test_pred']` arrays that align with the tail of the original close series for plotting.
+- **Experiments**: Invoke `python run_experiment.py --asset BTCUSDT --interval 1m --lookback 1000` for CLI baselines; the script splits data chronologically (80/20) and records findings in JSON.
+- **Plotting**: Prefer Plotly for interactive charts in Streamlit but keep Matplotlib fallbacks (as seen in `app1.py`) for environments lacking WebGL support.
+- **Optional TA**: If `pandas_ta` is installed, `app1.py` auto-enhances indicators; mirror that pattern when enriching features so code remains import-safe when the library is missing.
+- **Error Handling**: Follow `data.py`'s retry/backoff patterns—wrap network calls with `_make_requests_session` and degrade to cache instead of raising unless no data remains.
+- **State Management**: Streamlit state keys (`last_df`, `last_features`, `feat_names`) are shared assumptions; avoid renaming unless you update both apps.
+- **Known Gaps**: `models.py` currently mirrors `app.py`; restore the model/LLM utilities there before adding new features so tests and UIs have a single source of truth.
+- **Next Steps**: When adding new analytics, document the command (Streamlit or CLI) that exercises them and extend `pytest` coverage to guard regressions in indicator generation or prompt parsing.

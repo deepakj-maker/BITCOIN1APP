@@ -1,0 +1,12 @@
+pandas
+numpy
+requests
+streamlit
+scikit-learn
+xgboost           # optional but recommended
+statsmodels       # optional (for ARIMA)
+yfinance          # optional (for stock fetch)
+transformers      # optional (for local HF)
+torch             # optional (for local HF)
+pytest
+matplotlib
