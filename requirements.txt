@@ -3,21 +3,27 @@ numpy
 requests
 streamlit
 scikit-learn
-xgboost           # optional but recommended
-statsmodels       # optional (for ARIMA)
-yfinance          # optional (for stock fetch)
-transformers      # optional (for local HF)
-torch             # optional (for local HF)
+xgboost
+statsmodels
+yfinance
+plotly
 pytest
 matplotlib
-tensorflow         # optional (for deep learning models)
-keras              # optional (for deep learning models)
-fbprophet         # optional (for Prophet model)
-pmdarima          # optional (for auto ARIMA)
-ta-lib            # optional (for technical indicators)
-plotly            # optional (for interactive plots)
-jupyterlab       # optional (for Jupyter notebooks)
-beautifulsoup4    # optional (for web scraping)
-lxml              # optional (for XML parsing)
-nltk              # optional (for natural language processing)
-spacy            # optional (for natural language processing)
+
+# --- Deep Learning (Streamlit Cloud compatible) ---
+tensorflow-cpu==2.14.1
+keras==2.14.0
+
+# --- HuggingFace local models (safe CPU versions) ---
+transformers==4.41.2
+torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu
+
+# --- Time Series Models ---
+pmdarima
+prophet         # Replaces fbprophet (fbprophet is DEAD & will NOT install!)
+
+# --- NLP ---
+beautifulsoup4
+lxml
+nltk
+spacy
