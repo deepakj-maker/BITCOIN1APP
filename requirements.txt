@@ -1,29 +1,9 @@
+streamlit
 pandas
 numpy
 requests
-streamlit
 scikit-learn
-xgboost
-statsmodels
-yfinance
 plotly
-pytest
-matplotlib
-
-# --- Deep Learning (Streamlit Cloud compatible) ---
+yfinance
 tensorflow-cpu==2.14.1
 keras==2.14.0
-
-# --- HuggingFace local models (safe CPU versions) ---
-transformers==4.41.2
-torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu
-
-# --- Time Series Models ---
-pmdarima
-prophet         # Replaces fbprophet (fbprophet is DEAD & will NOT install!)
-
-# --- NLP ---
-beautifulsoup4
-lxml
-nltk
-spacy
