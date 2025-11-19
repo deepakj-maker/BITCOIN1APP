@@ -1,7 +1,6 @@
-# app.py
 """
-Refined Streamlit UI (multi-asset) — LSTM vs GRU predictor.
-Place next to data.py, features.py, models.py (models.py must implement train_compare_lstm_gru).
+Refined Streamlit UI (multi-asset) — RandomForest vs XGBoost predictor.
+Place next to data.py, features.py, models.py (models.py must implement train_compare_lstm_gru that now trains RF/XGB).
 Run: streamlit run app.py
 """
 from typing import Optional
@@ -13,7 +12,7 @@ from datetime import datetime, timedelta
 
 import data
 import features
-import models  # models.py should implement train_compare_lstm_gru
+import models  # models.py should implement train_compare_lstm_gru (now RF + XGB)
 
 # --- helper to robustly extract a single close price series ---
 def _extract_close_series(df: pd.DataFrame) -> pd.Series:
@@ -60,13 +59,13 @@ def _extract_close_series(df: pd.DataFrame) -> pd.Series:
     raise ValueError("No close or numeric column found in DataFrame")
 
 # Page config
-st.set_page_config(page_title="Multi-Asset — LSTM vs GRU", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Multi-Asset — RF vs XGBoost", layout="wide", initial_sidebar_state="expanded")
 
 # Header
-st.title("Multi-Asset — LSTM vs GRU Predictor")
+st.title("Multi-Asset — RandomForest vs XGBoost Predictor")
 st.markdown(
     "Use the left panel to select data & features. Click **Fetch** to load prices, **Build features** to create inputs, "
-    "and **Predict** to train LSTM and GRU and compare them using standard metrics."
+    "and **Predict** to train RandomForest and XGBoost and compare them using standard metrics."
 )
 
 # Layout
@@ -90,20 +89,17 @@ with controls_col:
     # Features form
     with st.expander("2) Features — how to build inputs", expanded=False):
         with st.form(key="features_form"):
-            n_lags = st.slider("Lag features (n)", 1, 120, 60)
+            n_lags = st.slider("Lag features (n)", 1, 240, 60)
             use_extras = st.checkbox("Use TA extras (technical indicators) when building features", value=True)
             build_btn = st.form_submit_button("Build features")
 
-    # Prediction form (LSTM/GRU)
-    with st.expander("3) Predictor settings (LSTM vs GRU)", expanded=True):
+    # Prediction form (RandomForest / XGBoost)
+    with st.expander("3) Predictor settings (RandomForest vs XGBoost)", expanded=True):
         with st.form(key="predict_form"):
-            lstm_units = st.number_input("LSTM units", min_value=8, max_value=1024, value=64, step=8)
-            gru_units = st.number_input("GRU units", min_value=8, max_value=1024, value=64, step=8)
-            dropout = st.slider("Dropout (applied after recurrent layer)", 0.0, 0.5, 0.0, 0.05)
-            epochs = st.number_input("Epochs", min_value=1, max_value=200, value=50, step=1)
-            batch_size = st.number_input("Batch size", min_value=1, max_value=1024, value=32, step=1)
-            patience = st.number_input("EarlyStopping patience", min_value=0, max_value=50, value=5, step=1)
-            retrain_btn = st.form_submit_button("Predict (Train & Compare LSTM/GRU)")
+            rf_n_estimators = st.number_input("RandomForest n_estimators", min_value=10, max_value=2000, value=100, step=10)
+            xgb_n_estimators = st.number_input("XGBoost n_estimators", min_value=10, max_value=2000, value=100, step=10)
+            random_seed = st.number_input("Random seed", min_value=0, max_value=2**31-1, value=42, step=1)
+            retrain_btn = st.form_submit_button("Predict (Train & Compare RF/XGBoost)")
 
     st.markdown("---")
     if st.button("Clear cached preview"):
@@ -235,22 +231,17 @@ with output_col:
         if df_src is None or df_src.empty:
             status.error("No data available to train on. Fetch first.")
         else:
-            # Use the provided n_lags (from Features UI) value - if user didn't press build, still use n_lags
-            with st.spinner("Training LSTM and GRU — this may take a while depending on epochs and data size..."):
+            with st.spinner("Training RandomForest and XGBoost — this may take a while depending on data size..."):
                 try:
                     # call the training/comparison function in models.py
                     res = models.train_compare_lstm_gru(
                         df=df_src,
                         n_lags=int(n_lags),
                         test_size=0.2,
-                        lstm_units=int(lstm_units),
-                        gru_units=int(gru_units),
-                        dropout=float(dropout),
-                        epochs=int(epochs),
-                        batch_size=int(batch_size),
-                        patience=int(patience),
-                        verbose=0,
-                        random_seed=42
+                        rf_n_estimators=int(rf_n_estimators),
+                        xgb_n_estimators=int(xgb_n_estimators),
+                        random_seed=int(random_seed),
+                        verbose=0
                     )
                 except Exception as e:
                     status.error("Training failed — see exception below.")
@@ -266,11 +257,10 @@ with output_col:
                 data_splits = res.get("data_splits", {})
                 histories = res.get("histories", {})
 
-                # Display summary metrics (replace existing block with this)
+                # Display summary metrics
                 with result_area:
                     st.subheader("Paper-style Comparison Table")
 
-                    # If models.py provided a DataFrame for the paper table, use it; else fall back to string
                     paper_df = res.get("paper_table_df")
                     if isinstance(paper_df, pd.DataFrame):
                         st.table(paper_df)
@@ -290,75 +280,73 @@ with output_col:
                         return default
 
                     # retrieve model metric dicts
-                    lstm_m = metrics.get("lstm", {}) or {}
-                    gru_m = metrics.get("gru", {}) or {}
-                    # transformer may not exist; use placeholders
-                    transformer_m = metrics.get("transformer", {}) or {}
+                    rf_m = metrics.get("random_forest", {}) or {}
+                    xgb_m = metrics.get("xgboost", {}) or {}
 
-                    # build small per-model tables (backward-compatible keys)
+                    # build small per-model tables
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.markdown("**LSTM**")
+                        st.markdown("**RandomForest**")
                         st.write(pd.DataFrame({
                             "metric": ["MAE (test)", "RMSE (test)", "MAPE (test)", "Direction Acc (test)", "Next prediction"],
                             "value": [
-                                _get_metric(lstm_m, ["mae_test", "mae"]),
-                                _get_metric(lstm_m, ["rmse_test", "rmse"]),
-                                _get_metric(lstm_m, ["mape_test", "mape"]),
-                                _get_metric(lstm_m, ["direction_acc_test", "direction_acc"]),
-                                _get_metric(lstm_m, ["next_pred", "next_prediction"])
+                                _get_metric(rf_m, ["mae_test", "mae"]),
+                                _get_metric(rf_m, ["rmse_test", "rmse"]),
+                                _get_metric(rf_m, ["mape_test", "mape"]),
+                                _get_metric(rf_m, ["direction_acc_test", "direction_acc"]),
+                                _get_metric(rf_m, ["next_pred", "next_prediction"])
                             ]
                         }))
 
                     with col2:
-                        st.markdown("**GRU**")
+                        st.markdown("**XGBoost**")
                         st.write(pd.DataFrame({
                             "metric": ["MAE (test)", "RMSE (test)", "MAPE (test)", "Direction Acc (test)", "Next prediction"],
                             "value": [
-                                _get_metric(gru_m, ["mae_test", "mae"]),
-                                _get_metric(gru_m, ["rmse_test", "rmse"]),
-                                _get_metric(gru_m, ["mape_test", "mape"]),
-                                _get_metric(gru_m, ["direction_acc_test", "direction_acc"]),
-                                _get_metric(gru_m, ["next_pred", "next_prediction"])
+                                _get_metric(xgb_m, ["mae_test", "mae"]),
+                                _get_metric(xgb_m, ["rmse_test", "rmse"]),
+                                _get_metric(xgb_m, ["mape_test", "mape"]),
+                                _get_metric(xgb_m, ["direction_acc_test", "direction_acc"]),
+                                _get_metric(xgb_m, ["next_pred", "next_prediction"])
                             ]
                         }))
 
                     # Show next-step predictions side-by-side (formatted)
                     nd_col1, nd_col2 = st.columns(2)
                     with nd_col1:
-                        next_l = _get_metric(lstm_m, ["next_pred", "next_prediction"], default=float("nan"))
+                        next_rf = _get_metric(rf_m, ["next_pred", "next_prediction"], default=float("nan"))
                         try:
-                            nd_val = f"{float(next_l):,.2f}"
+                            nd_val = f"{float(next_rf):,.2f}"
                         except Exception:
-                            nd_val = str(next_l)
-                        st.metric(label="LSTM — next-step prediction", value=nd_val)
+                            nd_val = str(next_rf)
+                        st.metric(label="RandomForest — next-step prediction", value=nd_val)
                     with nd_col2:
-                        next_g = _get_metric(gru_m, ["next_pred", "next_prediction"], default=float("nan"))
+                        next_xgb = _get_metric(xgb_m, ["next_pred", "next_prediction"], default=float("nan"))
                         try:
-                            nd_val2 = f"{float(next_g):,.2f}"
+                            nd_val2 = f"{float(next_xgb):,.2f}"
                         except Exception:
-                            nd_val2 = str(next_g)
-                        st.metric(label="GRU — next-step prediction", value=nd_val2)
+                            nd_val2 = str(next_xgb)
+                        st.metric(label="XGBoost — next-step prediction", value=nd_val2)
 
                     # Optionally show classification (percent) metrics if available
                     try:
-                        cls_l = lstm_m.get("classification") or lstm_m.get("classification_metrics")
-                        cls_g = gru_m.get("classification") or gru_m.get("classification_metrics")
-                        if cls_l or cls_g:
+                        cls_rf = rf_m.get("classification") or rf_m.get("classification_metrics")
+                        cls_xgb = xgb_m.get("classification") or xgb_m.get("classification_metrics")
+                        if cls_rf or cls_xgb:
                             st.markdown("**Direction classification (percent)**")
                             cdf = pd.DataFrame({
                                 "metric": ["Accuracy (%)", "Precision (%)", "Recall (%)", "F1 (%)"],
-                                "LSTM": [
-                                    (cls_l.get("accuracy_pct") if cls_l else None),
-                                    (cls_l.get("precision_pct") if cls_l else None),
-                                    (cls_l.get("recall_pct") if cls_l else None),
-                                    (cls_l.get("f1_pct") if cls_l else None)
+                                "RandomForest": [
+                                    (cls_rf.get("accuracy_pct") if cls_rf else None),
+                                    (cls_rf.get("precision_pct") if cls_rf else None),
+                                    (cls_rf.get("recall_pct") if cls_rf else None),
+                                    (cls_rf.get("f1_pct") if cls_rf else None)
                                 ],
-                                "GRU": [
-                                    (cls_g.get("accuracy_pct") if cls_g else None),
-                                    (cls_g.get("precision_pct") if cls_g else None),
-                                    (cls_g.get("recall_pct") if cls_g else None),
-                                    (cls_g.get("f1_pct") if cls_g else None)
+                                "XGBoost": [
+                                    (cls_xgb.get("accuracy_pct") if cls_xgb else None),
+                                    (cls_xgb.get("precision_pct") if cls_xgb else None),
+                                    (cls_xgb.get("recall_pct") if cls_xgb else None),
+                                    (cls_xgb.get("f1_pct") if cls_xgb else None)
                                 ]
                             }).set_index("metric")
                             st.table(cdf.fillna("-"))
@@ -376,7 +364,6 @@ with output_col:
                         if isinstance(preds, dict) and "y_test" in preds:
                             y_test_inv = np.asarray(preds.get("y_test"))
                         else:
-                            # fallback: try to reconstruct from full close series using data_splits
                             close_series = _extract_close_series(df_src).astype(float).reset_index(drop=True)
                             total_len = len(close_series)
                             if train_len is not None and test_len is not None:
@@ -385,22 +372,20 @@ with output_col:
                                 if end_idx <= total_len:
                                     y_test_inv = close_series.iloc[start_idx:end_idx].values
                                 else:
-                                    # fallback to tail alignment
-                                    L = len(res["preds"]["lstm"]["test_pred"])
+                                    L = len(res["preds"]["random_forest"]["test_pred"])
                                     y_test_inv = close_series.iloc[total_len - L: total_len].values
                             else:
-                                # last-resort: align to tail with length of predicted arrays
-                                L = len(res["preds"]["lstm"]["test_pred"])
+                                L = len(res["preds"]["random_forest"]["test_pred"])
                                 close_series = _extract_close_series(df_src).astype(float).reset_index(drop=True)
                                 total_len = len(close_series)
                                 y_test_inv = close_series.iloc[total_len - L: total_len].values
 
-                        test_pred_lstm = np.asarray(res["preds"]["lstm"]["test_pred"]).ravel()
-                        test_pred_gru = np.asarray(res["preds"]["gru"]["test_pred"]).ravel()
+                        test_pred_rf = np.asarray(res["preds"]["random_forest"]["test_pred"]).ravel()
+                        test_pred_xgb = np.asarray(res["preds"]["xgboost"]["test_pred"]).ravel()
                         y_test_inv = np.asarray(y_test_inv).ravel()
 
                         # align lengths: use min length among arrays
-                        L = min(len(y_test_inv), len(test_pred_lstm), len(test_pred_gru))
+                        L = min(len(y_test_inv), len(test_pred_rf), len(test_pred_xgb))
                         if L <= 0:
                             raise ValueError("Not enough points to plot test vs predictions after alignment.")
 
@@ -415,8 +400,8 @@ with output_col:
                         df_plot = pd.DataFrame({
                             "index": idx,
                             "actual": y_test_inv[:L],
-                            "lstm_pred": test_pred_lstm[:L],
-                            "gru_pred": test_pred_gru[:L]
+                            "rf_pred": test_pred_rf[:L],
+                            "xgb_pred": test_pred_xgb[:L]
                         })
 
                         # plot using plotly
@@ -424,8 +409,8 @@ with output_col:
                             import plotly.graph_objects as go
                             fig = go.Figure()
                             fig.add_trace(go.Scatter(x=df_plot["index"], y=df_plot["actual"], mode="lines+markers", name="Actual (test)"))
-                            fig.add_trace(go.Scatter(x=df_plot["index"], y=df_plot["lstm_pred"], mode="lines+markers", name="LSTM Pred"))
-                            fig.add_trace(go.Scatter(x=df_plot["index"], y=df_plot["gru_pred"], mode="lines+markers", name="GRU Pred"))
+                            fig.add_trace(go.Scatter(x=df_plot["index"], y=df_plot["rf_pred"], mode="lines+markers", name="RF Pred"))
+                            fig.add_trace(go.Scatter(x=df_plot["index"], y=df_plot["xgb_pred"], mode="lines+markers", name="XGB Pred"))
                             fig.update_layout(title="Test set: actual vs predictions (indices)", xaxis_title="index (relative to full series)", yaxis_title="Price")
                             with chart_area:
                                 st.plotly_chart(fig, use_container_width=True)
@@ -443,21 +428,21 @@ with output_col:
                             except Exception:
                                 pass
 
-                    # Plot training loss histories
+                    # Plot training histories (empty for sklearn models but kept for compatibility)
                     try:
-                        hist_lstm = histories.get("lstm", {})
-                        hist_gru = histories.get("gru", {})
-                        if hist_lstm or hist_gru:
-                            st.subheader("Training loss history")
+                        hist_rf = histories.get("random_forest", {})
+                        hist_xgb = histories.get("xgboost", {})
+                        if hist_rf or hist_xgb:
+                            st.subheader("Training history")
                             cols = st.columns(2)
-                            if hist_lstm.get("loss"):
+                            if hist_rf.get("loss"):
                                 with cols[0]:
-                                    st.markdown("**LSTM training**")
-                                    st.line_chart(pd.DataFrame({"loss": hist_lstm.get("loss"), "val_loss": hist_lstm.get("val_loss", [None]*len(hist_lstm.get("loss")))}))
-                            if hist_gru.get("loss"):
+                                    st.markdown("**RandomForest training**")
+                                    st.line_chart(pd.DataFrame({"loss": hist_rf.get("loss"), "val_loss": hist_rf.get("val_loss", [None]*len(hist_rf.get("loss")))}))
+                            if hist_xgb.get("loss"):
                                 with cols[1]:
-                                    st.markdown("**GRU training**")
-                                    st.line_chart(pd.DataFrame({"loss": hist_gru.get("loss"), "val_loss": hist_gru.get("val_loss", [None]*len(hist_gru.get("loss")))}))
+                                    st.markdown("**XGBoost training**")
+                                    st.line_chart(pd.DataFrame({"loss": hist_xgb.get("loss"), "val_loss": hist_xgb.get("val_loss", [None]*len(hist_xgb.get("loss")))}))
                     except Exception:
                         pass
 
@@ -475,5 +460,5 @@ with output_col:
 st.markdown("---")
 st.caption(
     "Hints: For equities/ETFs use Yahoo (SPY, VTI). For crypto real-time use Binance symbols (BTCUSDT).\n"
-    "Ensure you have tensorflow & scikit-learn installed in the environment (models.train_compare_lstm_gru uses them)."
+    "Ensure you have scikit-learn and xgboost installed in the environment (models.train_compare_lstm_gru uses them)."
 )
