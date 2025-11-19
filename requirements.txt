@@ -5,5 +5,8 @@ requests
 scikit-learn
 plotly
 yfinance
+matplotlib
+
+# CPU-only TensorFlow (pin to a stable CPU wheel)
 tensorflow-cpu==2.14.1
 keras==2.14.0
