@@ -1,7 +1,8 @@
-# models.py
 """
-Robust LSTM vs GRU trainer and comparison utilities for the Streamlit app.
-Replace previous train_compare_lstm_gru with this file.
+RandomForest vs XGBoost trainer and comparison utilities for the Streamlit app.
+Replaces previous LSTM/GRU TensorFlow implementation with scikit-learn RandomForestRegressor
+and XGBoost XGBRegressor. Function name `train_compare_lstm_gru` is kept for backward
+compatibility with the rest of the app but now trains RF and XGB models.
 """
 
 import math
@@ -10,13 +11,18 @@ from typing import Dict, Any, Optional
 
 import numpy as np
 import pandas as pd
-import tensorflow as tf
-from tensorflow.keras import models as kmodels
-from tensorflow.keras import layers as klayers
-from tensorflow.keras.callbacks import EarlyStopping
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+
+# Optional XGBoost - fall back to sklearn's GradientBoostingRegressor if not installed
+try:
+    from xgboost import XGBRegressor
+    _HAS_XGB = True
+except Exception:
+    from sklearn.ensemble import GradientBoostingRegressor as XGBRegressor
+    _HAS_XGB = False
 
 # Try to use user's features module if present
 try:
@@ -109,25 +115,9 @@ def _binary_direction_metrics_pct(y_true: np.ndarray, y_pred: np.ndarray) -> Dic
     }
 
 
-def _build_rnn_model(rnn_type: str, input_shape, units: int = 64, dropout: float = 0.0) -> kmodels.Model:
-    if rnn_type not in ("lstm", "gru"):
-        raise ValueError("rnn_type must be 'lstm' or 'gru'")
-    model = kmodels.Sequential()
-    model.add(klayers.Input(shape=input_shape))
-    if rnn_type == "lstm":
-        model.add(klayers.LSTM(units, activation="tanh"))
-    else:
-        model.add(klayers.GRU(units, activation="tanh"))
-    if dropout and dropout > 0:
-        model.add(klayers.Dropout(dropout))
-    model.add(klayers.Dense(1, activation="linear"))
-    model.compile(optimizer="adam", loss="mse")
-    return model
-
-
-def format_paper_table_df(lstm_m: Dict[str, Any], gru_m: Dict[str, Any], transformer_m: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+def format_paper_table_df(rf_m: Dict[str, Any], xgb_m: Dict[str, Any], transformer_m: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
     """
-    Return a DataFrame with rows R2, MAE, MSE, RMSE and columns LSTM, GRU, Transformer.
+    Return a DataFrame with rows R2, MAE, MSE, RMSE and columns RandomForest, XGBoost, Transformer.
     Values formatted as floats with 6 decimals or '-' if missing.
     """
     rows = ["R2", "MAE", "MSE", "RMSE"]
@@ -152,41 +142,36 @@ def format_paper_table_df(lstm_m: Dict[str, Any], gru_m: Dict[str, Any], transfo
     transformer_m = transformer_m or {}
     df = pd.DataFrame({
         "Metric": rows,
-        "LSTM": [_get_val(r, lstm_m) for r in rows],
-        "GRU": [_get_val(r, gru_m) for r in rows],
+        "RandomForest": [_get_val(r, rf_m) for r in rows],
+        "XGBoost": [_get_val(r, xgb_m) for r in rows],
         "Transformer": [_get_val(r, transformer_m) for r in rows]
     }).set_index("Metric")
     return df
 
 
 # -------------------------
-# Main exported function
+# Main exported function (keeps original name for compatibility)
 # -------------------------
 def train_compare_lstm_gru(
     df: pd.DataFrame,
     n_lags: int = 60,
     test_size: float = 0.2,
-    lstm_units: int = 64,
-    gru_units: int = 64,
-    dropout: float = 0.0,
-    epochs: int = 50,
-    batch_size: int = 32,
-    patience: int = 5,
-    verbose: int = 0,
-    random_seed: int = 42
+    rf_n_estimators: int = 100,
+    xgb_n_estimators: int = 100,
+    random_seed: int = 42,
+    verbose: int = 0
 ) -> Dict[str, Any]:
     """
-    Train LSTM and GRU on df['Close'] and compare. Returns a dict with:
+    Train RandomForest and XGBoost on df['Close'] and compare. Returns a dict with:
       - metrics: per-model dicts (regression + classification)
       - preds: test/train/next predictions
-      - models: keras model objects
+      - models: trained model objects
       - scaler: MinMaxScaler instance
       - data_splits: info
-      - histories: training histories
-      - paper_table (string) and paper_table_df (DataFrame)
-      - debug_shapes (helpful for diagnosing alignment)
+      - histories: empty (kept for compatibility)
+      - paper_table and paper_table_df
+      - debug_shapes
     """
-    tf.random.set_seed(random_seed)
     np.random.seed(random_seed)
 
     if df is None or "Close" not in df.columns:
@@ -200,20 +185,17 @@ def train_compare_lstm_gru(
     scaler = MinMaxScaler((0, 1))
     series_scaled = scaler.fit_transform(series.reshape(-1, 1)).flatten()
 
-    # Try to use features.build_features_from_df if provided (must match expected output)
-    # But for safety we use univariate sequences from close price
-    def _create_sequences(series_arr: np.ndarray, n_lags_local: int):
+    # create tabular sequences (n_samples, n_lags)
+    def _create_sequences_tabular(series_arr: np.ndarray, n_lags_local: int):
         X, y = [], []
         for i in range(len(series_arr) - n_lags_local):
             X.append(series_arr[i:i + n_lags_local])
             y.append(series_arr[i + n_lags_local])
         X = np.asarray(X, dtype=float)
         y = np.asarray(y, dtype=float)
-        if X.size == 0:
-            return np.empty((0, n_lags_local, 1)), np.empty((0,))
-        return X.reshape((X.shape[0], X.shape[1], 1)), y
+        return X, y
 
-    X, y = _create_sequences(series_scaled, int(n_lags))
+    X, y = _create_sequences_tabular(series_scaled, int(n_lags))
     N = X.shape[0]
     if N <= 0:
         raise ValueError("Not enough data to create sequences with the chosen n_lags.")
@@ -226,41 +208,22 @@ def train_compare_lstm_gru(
     X_train, X_test = X[:train_len], X[train_len:]
     y_train, y_test = y[:train_len], y[train_len:]
 
-    prev_train_scaled = X_train[:, -1, 0] if X_train.shape[0] > 0 else np.array([])
-    prev_test_scaled = X_test[:, -1, 0] if X_test.shape[0] > 0 else np.array([])
+    prev_train_scaled = X_train[:, -1] if X_train.shape[0] > 0 else np.array([])
+    prev_test_scaled = X_test[:, -1] if X_test.shape[0] > 0 else np.array([])
 
     # --- Build models ---
-    input_shape = (X_train.shape[1], X_train.shape[2])
-    lstm_model = _build_rnn_model("lstm", input_shape, units=int(lstm_units), dropout=float(dropout))
-    gru_model = _build_rnn_model("gru", input_shape, units=int(gru_units), dropout=float(dropout))
-
-    es = EarlyStopping(monitor="val_loss", patience=int(patience), restore_best_weights=True, verbose=0)
+    rf_model = RandomForestRegressor(n_estimators=int(rf_n_estimators), random_state=int(random_seed), n_jobs=-1)
+    xgb_model = XGBRegressor(n_estimators=int(xgb_n_estimators), random_state=int(random_seed), verbosity=0)
 
     # --- Fit models ---
-    history_lstm = lstm_model.fit(
-        X_train, y_train,
-        validation_data=(X_test, y_test),
-        epochs=int(epochs),
-        batch_size=int(batch_size),
-        callbacks=[es] if patience > 0 else [],
-        verbose=int(verbose),
-        shuffle=False
-    )
-    history_gru = gru_model.fit(
-        X_train, y_train,
-        validation_data=(X_test, y_test),
-        epochs=int(epochs),
-        batch_size=int(batch_size),
-        callbacks=[es] if patience > 0 else [],
-        verbose=int(verbose),
-        shuffle=False
-    )
+    rf_model.fit(X_train, y_train)
+    xgb_model.fit(X_train, y_train)
 
     # --- Predictions (scaled) ---
-    train_pred_lstm_s = lstm_model.predict(X_train, batch_size=batch_size).ravel() if X_train.shape[0] > 0 else np.array([])
-    test_pred_lstm_s = lstm_model.predict(X_test, batch_size=batch_size).ravel() if X_test.shape[0] > 0 else np.array([])
-    train_pred_gru_s = gru_model.predict(X_train, batch_size=batch_size).ravel() if X_train.shape[0] > 0 else np.array([])
-    test_pred_gru_s = gru_model.predict(X_test, batch_size=batch_size).ravel() if X_test.shape[0] > 0 else np.array([])
+    train_pred_rf_s = rf_model.predict(X_train) if X_train.shape[0] > 0 else np.array([])
+    test_pred_rf_s = rf_model.predict(X_test) if X_test.shape[0] > 0 else np.array([])
+    train_pred_xgb_s = xgb_model.predict(X_train) if X_train.shape[0] > 0 else np.array([])
+    test_pred_xgb_s = xgb_model.predict(X_test) if X_test.shape[0] > 0 else np.array([])
 
     def inv_scale(arr_scaled):
         arr = np.asarray(arr_scaled).reshape(-1, 1)
@@ -270,17 +233,17 @@ def train_compare_lstm_gru(
 
     y_train_inv = inv_scale(y_train)
     y_test_inv = inv_scale(y_test)
-    train_pred_lstm = inv_scale(train_pred_lstm_s)
-    test_pred_lstm = inv_scale(test_pred_lstm_s)
-    train_pred_gru = inv_scale(train_pred_gru_s)
-    test_pred_gru = inv_scale(test_pred_gru_s)
+    train_pred_rf = inv_scale(train_pred_rf_s)
+    test_pred_rf = inv_scale(test_pred_rf_s)
+    train_pred_xgb = inv_scale(train_pred_xgb_s)
+    test_pred_xgb = inv_scale(test_pred_xgb_s)
 
     # next-step prediction using last n_lags from scaled series
-    last_seq = series_scaled[-int(n_lags):].reshape((1, int(n_lags), 1))
-    next_pred_lstm_s = float(lstm_model.predict(last_seq).ravel()[0])
-    next_pred_gru_s = float(gru_model.predict(last_seq).ravel()[0])
-    next_pred_lstm = float(inv_scale([next_pred_lstm_s])[0])
-    next_pred_gru = float(inv_scale([next_pred_gru_s])[0])
+    last_seq = series_scaled[-int(n_lags):].reshape(1, -1)
+    next_pred_rf_s = float(rf_model.predict(last_seq).ravel()[0])
+    next_pred_xgb_s = float(xgb_model.predict(last_seq).ravel()[0])
+    next_pred_rf = float(inv_scale([next_pred_rf_s])[0])
+    next_pred_xgb = float(inv_scale([next_pred_xgb_s])[0])
 
     prev_test_real = inv_scale(prev_test_scaled)
     prev_train_real = inv_scale(prev_train_scaled)
@@ -317,24 +280,23 @@ def train_compare_lstm_gru(
 
         return out
 
-    lstm_metrics = _assemble(y_test_inv, test_pred_lstm, prev_test_real, next_pred_lstm)
-    gru_metrics = _assemble(y_test_inv, test_pred_gru, prev_test_real, next_pred_gru)
+    rf_metrics = _assemble(y_test_inv, test_pred_rf, prev_test_real, next_pred_rf)
+    xgb_metrics = _assemble(y_test_inv, test_pred_xgb, prev_test_real, next_pred_xgb)
 
-    metrics = {"lstm": lstm_metrics, "gru": gru_metrics}
+    metrics = {"random_forest": rf_metrics, "xgboost": xgb_metrics}
 
     # Prepare paper-style table (DataFrame + string)
-    paper_df = format_paper_table_df(lstm_metrics, gru_metrics, transformer_m=None)
-    # pretty string (simple markdown-like)
+    paper_df = format_paper_table_df(rf_metrics, xgb_metrics, transformer_m=None)
     paper_table_str = paper_df.to_string()
 
     results = {
         "metrics": metrics,
         "preds": {
-            "lstm": {"train_pred": train_pred_lstm, "test_pred": test_pred_lstm, "next_pred": next_pred_lstm},
-            "gru": {"train_pred": train_pred_gru, "test_pred": test_pred_gru, "next_pred": next_pred_gru},
+            "random_forest": {"train_pred": train_pred_rf, "test_pred": test_pred_rf, "next_pred": next_pred_rf},
+            "xgboost": {"train_pred": train_pred_xgb, "test_pred": test_pred_xgb, "next_pred": next_pred_xgb},
             "y_test": y_test_inv
         },
-        "models": {"lstm": lstm_model, "gru": gru_model},
+        "models": {"random_forest": rf_model, "xgboost": xgb_model},
         "scaler": scaler,
         "data_splits": {
             "X_train_shape": X_train.shape,
@@ -345,7 +307,8 @@ def train_compare_lstm_gru(
             "test_len": test_len,
             "n_lags": int(n_lags)
         },
-        "histories": {"lstm": history_lstm.history, "gru": history_gru.history},
+        # scikit-learn models do not provide epoch histories; kept for compatibility
+        "histories": {"random_forest": {}, "xgboost": {}},
         "paper_table": paper_table_str,
         "paper_table_df": paper_df,
         "debug_shapes": {
@@ -356,8 +319,8 @@ def train_compare_lstm_gru(
             "X_train_shape": tuple(X_train.shape),
             "X_test_shape": tuple(X_test.shape),
             "y_test_shape": tuple(y_test.shape),
-            "test_pred_lstm_shape": tuple(test_pred_lstm.shape),
-            "test_pred_gru_shape": tuple(test_pred_gru.shape),
+            "test_pred_rf_shape": tuple(np.asarray(test_pred_rf).shape),
+            "test_pred_xgb_shape": tuple(np.asarray(test_pred_xgb).shape),
             "y_test_inv_shape": tuple(np.asarray(y_test_inv).shape)
         }
     }
